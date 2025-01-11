@@ -22,6 +22,6 @@ soupsieve==2.6
 spacy==3.8.2
 terminaltables==3.1.10
 update-checker==0.18.0
-urllib3==2.2.3
+urllib3==2.3.0
 websocket-client==1.8.0
 yarl==1.18.3
