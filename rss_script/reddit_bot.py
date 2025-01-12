@@ -1,15 +1,15 @@
-import logging
 import math
 import sys
 import time
 from datetime import datetime, timedelta
+from logging import Logger
 from signal import signal, SIGINT, SIGTERM
 from pprint import pformat
 
 import praw
 import requests
 
-from . import utils
+from . import types, utils
 
 
 class RedditBot:
@@ -25,7 +25,7 @@ class RedditBot:
         Dictionary containing the credentials for the Reddit API
     sub_list : list
         List of dictionaries containing the subreddits' information. Each dictionary contains 'name', the subreddit's
-        name, and 'rss_feeds', the list of RSS feeds to check. Each item in 'rss_feeds' contains 'urls', the list of RSS
+        name, and 'cycles', the list of RSS feeds to check. Each item in 'cycles' contains 'feeds', the list of RSS
         urls to check, 'check_interval', the time in seconds between each check, and optionally 'flair', the flair to
         use when making Reddit posts of the RSS feed.
     db_file : str
@@ -55,23 +55,24 @@ class RedditBot:
             None
         """
         # Initializes logger
-        self.logger = utils.configure_logger(log_file)
+        self.logger: Logger = utils.configure_logger(log_file)
         # Sets testing mode
         self.testing = testing
         self.logger.info(f"Testing Mode: {'ON' if self.testing else 'OFF'}")
-        # Loads config file, sets self.credentials and self.sub_list
-        self.sub_list, self.credentials = utils.load_config(config_file)
+        # Loads config file and env variables, sets self.credentials and self.sub_list
+        self.credentials = utils.load_credentials()
+        self.sub_list = utils.load_config(config_file)
         self.logger.debug(f"Config List:\n{pformat(self.sub_list)}\n")
 
         # Initializes db dictionary, sets self.db
         self.db_file = db_file
-        self.db = utils.load_db(db_file)
+        self.db: types.Database = utils.load_db(db_file)
         self._initialize_db()
         # Initializes reddit praw object
         self.reddit = praw.Reddit(username=self.credentials['user'], password=self.credentials['password'],
                                   client_id=self.credentials['client_id'],
                                   client_secret=self.credentials['client_secret'],
-                                  user_agent="Subreddit-News:V1.0 by /u/GeoWa")
+                                  user_agent="RSS2Reddit:v2.0 by /u/GeoWa")
         # Sends Discord Notification
         utils.send_discord_message(
             f"Bot Started on {'Testing Mode' if self.testing else 'Normal Mode'} at {time.strftime('%Y-%m-%d %H:%M')}")
@@ -102,17 +103,17 @@ class RedditBot:
                 if sub_info['name'] not in self.db:
                     self.db[sub_info['name']] = {
                         'update_list': [{"update_time": 0, "update_index": 0, "listening": True}] * len(
-                            sub_info['rss_feeds']), 'rss_sources': {}}
+                            sub_info['cycles']), 'rss_sources': {}}
                 else:
                     db_entry = self.db[sub_info['name']]
-                    if len(db_entry['update_list']) > len(sub_info['rss_feeds']):
-                        db_entry['update_list'] = db_entry['update_list'][:len(sub_info['rss_feeds'])]
+                    if len(db_entry['update_list']) > len(sub_info['cycles']):
+                        db_entry['update_list'] = db_entry['update_list'][:len(sub_info['cycles'])]
                     for index, item in enumerate(db_entry['update_list']):
                         item['update_time'] = min(item['update_time'],
-                                                  int(time.time()) + sub_info['rss_feeds'][index]['check_interval'])
+                                                  int(time.time()) + sub_info['cycles'][index]['check_interval'])
                         item['update_index'] = item['update_index'] if item['update_index'] < len(
-                            sub_info['rss_feeds'][index]['urls']) else 0
-                    total_urls = [url for feed in sub_info['rss_feeds'] for url in feed['urls']]
+                            sub_info['cycles'][index]['feeds']) else 0
+                    total_urls = [feed['url'] for cycle in sub_info['cycles'] for feed in cycle['feeds']]
                     new_rss_sources = {}
                     for url in db_entry['rss_sources'].keys():
                         if url in total_urls:
@@ -129,16 +130,20 @@ class RedditBot:
         time.
         """
         while True:
-            self.logger.info(f"[{time.strftime('%Y-%m-%d %H:%M')}] Checking RSS feeds...")
-            next_update = self._subreddits_loop()
-            # Update db.json
-            if not self.testing:
-                self.logger.debug("Updating db.json...")
-                utils.update_db(self.db_file, self.db)
-            # Wait until next update
-            t = datetime.fromtimestamp(next_update).strftime('%Y-%m-%d %H:%M')
-            self.logger.info(f"Next update at {t}")
-            utils.until(next_update)
+            try:
+                self.logger.info(f"[{time.strftime('%Y-%m-%d %H:%M')}] Checking RSS feeds...")
+                next_update = self._subreddits_loop()
+                # Update db.json
+                if not self.testing:
+                    self.logger.debug("Updating db.json...")
+                    utils.update_db(self.db_file, self.db)
+                # Wait until next update
+                t = datetime.fromtimestamp(next_update).strftime('%Y-%m-%d %H:%M')
+                self.logger.info(f"Next update at {t}")
+                utils.until(next_update)
+            except Exception as e:
+                self.logger.error(f"An error occurred: {str(e)}", exc_info=True)
+                sys.exit(1)
 
     def _subreddits_loop(self) -> float:
         """
@@ -152,20 +157,21 @@ class RedditBot:
             self.logger.debug(f"Checking r/{sub_info['name']}...")
             updates = self.db[sub_info['name']]['update_list']
             sources = self.db[sub_info['name']]['rss_sources']
-            for index in range(len(sub_info['rss_feeds'])):
-                current_feed = sub_info['rss_feeds'][index]
+            for index in range(len(sub_info['cycles'])):
+                current_feed = sub_info['cycles'][index]
                 update_entry = updates[index]
-                url = current_feed['urls'][update_entry['update_index']]
+                feed_entry = current_feed['feeds'][update_entry['update_index']]
                 # Update time has passed
                 if update_entry['update_time'] <= math.ceil(time.time()):
-                    next_update = min(self._handle_update(sub_info, sources, current_feed, update_entry, url),
+                    next_update = min(self._handle_update(sub_info, sources, current_feed, update_entry, feed_entry),
                                       next_update)
                 # Update time has not passed
                 else:
                     next_update = min(update_entry['update_time'], next_update)
         return next_update
 
-    def _handle_update(self, sub_info: dict, sources: dict, current_feed: dict, update_entry: dict, url: str) -> float:
+    def _handle_update(self, sub_info: types.SubredditConfig, sources: dict[str, types.RssSource],
+                       current_feed: types.Cycle, update_entry: types.UpdateEntry, feed_entry: types.Feed) -> float:
         """
         Updates a specific subreddit-RSS feed combination by making a request to the RSS feed, updating the db, and
         posting to Reddit if applicable.
@@ -180,6 +186,7 @@ class RedditBot:
         Returns:
             Timestamp of when this subreddit-RSS feed combination should next enter listening mode.
         """
+        url = feed_entry['url']
         # New Entry
         if url not in sources:
             sources[url] = {'last_modified': None, 'etag': None, 'last_id': None}
@@ -195,7 +202,7 @@ class RedditBot:
         # Check for errors from RSSParser.py
         if not title:
             return math.inf
-        return self._handle_rss_response(sub_info, sources, current_feed, update_entry, url, title, link, guid)
+        return self._handle_rss_response(sub_info, sources, current_feed, update_entry, feed_entry, title, link, guid)
 
     def _rss_request(self, url: str, subreddit: str) -> str | None:
         """
@@ -223,8 +230,9 @@ class RedditBot:
             self.logger.error(f'Error requesting {url}: {str(e)}')
             return None
 
-    def _handle_rss_response(self, sub_info: dict, sources: dict, current_feed: dict, update_entry: dict, url: str,
-                             title: str, link: str, guid: str) -> int:
+    def _handle_rss_response(self, sub_info: types.SubredditConfig, sources: dict[str, types.RssSource],
+                             current_feed: types.Cycle, update_entry: types.UpdateEntry,
+                             feed_entry: types.Feed, title: str, link: str, guid: str) -> int:
         """
         Handles the response from the RSS feed by updating the db, managing the listening mode, and posting to Reddit if
         applicable.
@@ -242,6 +250,7 @@ class RedditBot:
         Returns:
             Timestamp of when this subreddit-RSS feed combination should next enter listening mode.
         """
+        url = feed_entry['url']
         # Update db and post to Reddit
         if not update_entry['listening']:
             self.logger.debug(f"Began listening")
@@ -254,7 +263,8 @@ class RedditBot:
             update_entry.update({'update_time': new_update})
         else:
             self.logger.debug(f"New story found! Checking for duplicates of {link}...")
-            if self._check_for_duplicates(title, link, self.reddit.subreddit(sub_info['name'])):
+            if (self._check_blocklist(title, feed_entry.get('block', [])) or
+                    self._check_for_duplicates(title, link, self.reddit.subreddit(sub_info['name']))):
                 new_update = int(time.time()) + 1800  # Check 30 minutes later
                 sources[url]['last_id'] = guid
                 update_entry.update({'update_time': new_update, 'listening': True})
@@ -265,7 +275,7 @@ class RedditBot:
                 new_update = int(time.time()) + current_feed['check_interval']
                 sources[url]['last_id'] = guid
                 update_entry.update({'update_time': new_update,
-                                     'update_index': (update_entry['update_index'] + 1) % len(current_feed['urls']),
+                                     'update_index': (update_entry['update_index'] + 1) % len(current_feed['feeds']),
                                      'listening': False})
         return new_update
 
@@ -308,6 +318,25 @@ class RedditBot:
         except Exception as e:
             self.logger.error(f'Error checking for duplicates: {str(e)}')
             return False
+
+    def _check_blocklist(self, title: str, blocklist: list[str]) -> bool:
+        """
+        Checks if the title contains any of the words in the blocklist
+
+        Args:
+            title: The title of the post
+            blocklist: The list of words to check for in the title
+
+        Returns:
+            True if the title contains any of the words in the blocklist, False otherwise
+        """
+        lowercase_title = title.lower()
+        for word in blocklist:
+            if word.lower() in lowercase_title:
+                utils.send_discord_message(f"Blocklist word found: {word} in {title}")
+                self.logger.debug(f"Blocklist word found: {word} in {title}")
+                return True
+        return False
 
     def _post_to_subreddit(self, sub_name: str, title: str, link: str, flair_text: str | None = None) -> None:
         """

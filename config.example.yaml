@@ -1,10 +1,9 @@
 ---
-# Subreddits
 - name: mysubreddit1
   cycles:
     - feeds:
         - url: https://example.com/feed1.rss
-          blacklist: [ item1, item2 ]
+          block: [ item1, item2 ]
         - url: https://example.com/feed2.rss
       check_interval: 3600
       flair: Flair
@@ -15,13 +14,6 @@
   cycles:
     - feeds:
         - url: https://example.com/feed4.rss
-          blacklist: [ ]  # Same as not specifying
+          block: [ ]  # Same as not specifying
         - url: https://example.com/feed5.rss
       check_interval: 14400
-...
----
-# Credentials
-user: username
-password: password
-client_id: client_id
-client_secret: client_secret

@@ -10,8 +10,12 @@ services:
     stdin_open: true
     tty: true
     environment:
-    #      - TZ=
-    #      - DISCORD_WEBHOOK_URL=
+      - TZ=America/New_York
+      - USER_NAME=${USER_NAME}
+      - PASSWORD=${PASSWORD}
+      - CLIENT_ID=${CLIENT_ID}
+      - CLIENT_SECRET=${CLIENT_SECRET}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
     volumes:
       - ./db:/app/db
     deploy:

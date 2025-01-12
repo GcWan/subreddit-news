@@ -1,0 +1,8 @@
+bs4
+discordwebhook
+lxml
+praw
+python-dotenv
+pyyaml
+requests
+spacy

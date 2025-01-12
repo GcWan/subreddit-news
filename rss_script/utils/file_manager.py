@@ -1,10 +1,27 @@
 import json
 import os
 import yaml
-from typing import TextIO
+from dotenv import load_dotenv
+from ..types import SubredditConfig, Credentials, Database
 
 
-def load_config(config_file: str) -> tuple[list[dict], dict[str, str]]:
+def load_credentials() -> Credentials:
+    """
+    Loads the credentials from the environment variables
+
+    Returns:
+        The credentials from the environment variables
+    """
+    load_dotenv()
+    return Credentials(
+        user=os.getenv('USER_NAME'),
+        password=os.getenv('PASSWORD'),
+        client_id=os.getenv('CLIENT_ID'),
+        client_secret=os.getenv('CLIENT_SECRET')
+    )
+
+
+def load_config(config_file: str) -> list[SubredditConfig]:
     """
     Loads the config file
 
@@ -16,13 +33,13 @@ def load_config(config_file: str) -> tuple[list[dict], dict[str, str]]:
     """
     try:
         with open(config_file) as yaml_data_file:
-            config = yaml.safe_load_all(yaml_data_file)
-            return next(config), next(config)
+            config = yaml.safe_load(yaml_data_file)
+            return config
     except Exception as e:
         print(f'Error loading {config_file}: {str(e)}')
 
 
-def load_db(filename: str) -> dict[str, dict]:
+def load_db(filename: str) -> Database:
     """
     Loads the database file
 
@@ -41,7 +58,7 @@ def load_db(filename: str) -> dict[str, dict]:
         return {}
 
 
-def update_db(filename: str, db: dict[str, dict]) -> None:
+def update_db(filename: str, db: Database) -> None:
     """
     Updates the database file
 
@@ -56,5 +73,5 @@ def update_db(filename: str, db: dict[str, dict]) -> None:
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    with open(filename, 'w') as file:  # type: TextIO
+    with open(filename, 'w') as file:
         json.dump(db, file, indent=2)
